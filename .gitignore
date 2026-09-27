@@ -1,0 +1,19 @@
+# Large raw data -- never commit, fetch via scripts/fetch_samples.py
+data/raw/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Databricks
+.databrickscfg
+
+# OS/editor
+.DS_Store
+.vscode/
+*.log
