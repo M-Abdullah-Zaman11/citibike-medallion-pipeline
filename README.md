@@ -4,8 +4,8 @@ Semester project — end-to-end Spark data pipeline (Bronze → Silver → Gold)
 
 ## Team
 
-- [Name 1]
-- [Name 2]
+- Muhammad Abdullah 22L7545
+- Shaheer Asif 22L6396
 
 ## Project Summary
 
