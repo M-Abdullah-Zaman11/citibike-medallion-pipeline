@@ -1,6 +1,9 @@
 # Large raw data -- never commit, fetch via scripts/fetch_samples.py
 data/raw/
 
+# Accumulated GBFS history -- grows continuously, regenerate via scripts/poll_gbfs.py
+data/gbfs/
+
 # Python
 __pycache__/
 *.pyc

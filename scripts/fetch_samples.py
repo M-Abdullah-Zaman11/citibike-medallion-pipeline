@@ -1,21 +1,26 @@
 """
-Fetch Citi Bike full-load and incremental-load sample data for the repo.
+Fetch Citi Bike full-load and incremental-load data for the repo.
 
-Run this on your own machine (not inside a restricted sandbox) since it needs
-access to s3.amazonaws.com.
+Run this on your own machine (needs access to s3.amazonaws.com), not inside a
+restricted sandbox or CI runner that blocks outbound traffic to S3.
 
-What it does:
-  1. Downloads the full-load baseline months (default: Jan 2024 - Dec 2024)
-     and the incremental-load month (default: Jan 2025) from Citi Bike's
-     public S3 bucket.
-  2. Unzips each file.
-  3. Writes a trimmed sample (first N rows, default 50,000) of the FIRST
-     full-load month and of the incremental month into data/samples/,
-     since GitHub blocks files over 100 MB and full monthly files can be
-     several hundred MB uncompressed.
-  4. Leaves the full unzipped CSVs in data/raw/ (gitignored) for your local
-     Spark pipeline to actually read from -- these are NOT meant to be
-     committed to GitHub.
+Design notes (fixes from TA review):
+  - Citi Bike's monthly files have used more than one naming convention over
+    the years (some months are "<yyyymm>-citibike-tripdata.csv.zip", others
+    are "<yyyymm>-citibike-tripdata.zip"). Instead of hardcoding one pattern,
+    this script tries a list of candidate filenames per month and uses
+    whichever one actually exists.
+  - Months with more than ~1 million trips are split into multiple CSVs
+    inside a single zip. This script concatenates all CSVs found in a
+    month's zip rather than assuming exactly one.
+  - The FULL LOAD baseline is the most recent N complete months as of
+    whenever you run this script (default N=6), not a fixed past year --
+    so "full load" always means "recent history," never a replay of 2024.
+  - A manifest file (data/manifest.json) records which months have already
+    been pulled into the baseline. Re-running this script later will only
+    download the next month NOT already in the manifest and will file it as
+    INCREMENTAL, which is what makes the incremental load genuinely new
+    data rather than a relabeled historical month.
 
 Usage:
     pip install requests
@@ -23,33 +28,55 @@ Usage:
 """
 
 import io
+import json
 import os
 import zipfile
+from datetime import date
+
 import requests
 
 BASE_URL = "https://s3.amazonaws.com/tripdata"
-
-FULL_LOAD_MONTHS = [f"2024{m:02d}" for m in range(1, 13)]   # Jan-Dec 2024
-INCREMENTAL_MONTH = "202501"                                 # Jan 2025
-
-RAW_DIR = "data/raw"
-SAMPLE_DIR = "data/samples"
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+RAW_DIR = os.path.join(REPO_ROOT, "data", "raw")
+SAMPLE_DIR = os.path.join(REPO_ROOT, "data", "samples")
+MANIFEST_PATH = os.path.join(REPO_ROOT, "data", "manifest.json")
 SAMPLE_ROWS = 50_000
+BASELINE_MONTHS = 6  # per TA guidance: start smaller to stay within free-tier limits
 
 
-def download_and_extract(yyyymm, dest_dir):
-    fname = f"{yyyymm}-citibike-tripdata.csv.zip"
-    url = f"{BASE_URL}/{fname}"
-    print(f"Downloading {url} ...")
-    resp = requests.get(url, timeout=120)
-    resp.raise_for_status()
+def candidate_filenames(yyyymm):
+    """Return the filename patterns to try, in order, for a given month."""
+    return [
+        f"{yyyymm}-citibike-tripdata.csv.zip",
+        f"{yyyymm}-citibike-tripdata.zip",
+    ]
 
-    with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
-        os.makedirs(dest_dir, exist_ok=True)
-        zf.extractall(dest_dir)
-        extracted = [n for n in zf.namelist() if n.endswith(".csv")]
-    print(f"  Extracted: {extracted}")
-    return [os.path.join(dest_dir, n) for n in extracted]
+
+def try_download(yyyymm):
+    """Try each candidate filename for this month; return (bytes, filename) or (None, None)."""
+    for fname in candidate_filenames(yyyymm):
+        url = f"{BASE_URL}/{fname}"
+        try:
+            resp = requests.get(url, timeout=120)
+        except requests.RequestException:
+            continue
+        if resp.status_code == 200 and resp.content[:2] == b"PK":  # valid zip signature
+            print(f"  Found: {url}")
+            return resp.content, fname
+        print(f"  Not found (status {resp.status_code}): {url}")
+    return None, None
+
+
+def extract_all_csvs(zip_bytes, dest_dir):
+    """Extract every CSV in the zip (handles multi-part months) into dest_dir."""
+    os.makedirs(dest_dir, exist_ok=True)
+    extracted = []
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        for name in zf.namelist():
+            if name.lower().endswith(".csv") and "__MACOSX" not in name and not os.path.basename(name).startswith("."):
+                zf.extract(name, dest_dir)
+                extracted.append(os.path.join(dest_dir, name))
+    return extracted
 
 
 def write_sample(csv_path, out_path, n_rows=SAMPLE_ROWS):
@@ -63,27 +90,97 @@ def write_sample(csv_path, out_path, n_rows=SAMPLE_ROWS):
     print(f"  Sample written: {out_path}")
 
 
+def load_manifest():
+    if os.path.exists(MANIFEST_PATH):
+        with open(MANIFEST_PATH) as f:
+            return json.load(f)
+    return {"baseline_months": []}
+
+
+def save_manifest(manifest):
+    os.makedirs(os.path.dirname(MANIFEST_PATH), exist_ok=True)
+    with open(MANIFEST_PATH, "w") as f:
+        json.dump(manifest, f, indent=2)
+
+
+def find_available_recent_months(count):
+    """Search backwards from last month until `count` real months are found."""
+    today = date.today()
+    y, m = today.year, today.month - 1  # last month is usually the newest published
+    if m == 0:
+        y, m = y - 1, 12
+
+    found = []
+    probe_y, probe_m = y, m
+    attempts = 0
+    while len(found) < count and attempts < count + 6:  # small buffer for gaps
+        yyyymm = f"{probe_y}{probe_m:02d}"
+        print(f"Checking {yyyymm} ...")
+        content, fname = try_download(yyyymm)
+        if content:
+            found.append((yyyymm, content, fname))
+        probe_m -= 1
+        if probe_m == 0:
+            probe_m, probe_y = 12, probe_y - 1
+        attempts += 1
+    return found  # newest first
+
+
 def main():
-    print("== Full load (baseline) ==")
-    first_month_csvs = None
-    for i, yyyymm in enumerate(FULL_LOAD_MONTHS):
-        csvs = download_and_extract(yyyymm, os.path.join(RAW_DIR, "full_load", yyyymm))
-        if i == 0:
-            first_month_csvs = csvs
+    manifest = load_manifest()
+    baseline_set = set(manifest["baseline_months"])
 
-    if first_month_csvs:
-        write_sample(
-            first_month_csvs[0],
-            os.path.join(SAMPLE_DIR, f"full_load_sample_{FULL_LOAD_MONTHS[0]}.csv"),
-        )
+    if not baseline_set:
+        print(f"== No baseline yet. Pulling {BASELINE_MONTHS + 1} most recent months ==")
+        print(f"   (oldest {BASELINE_MONTHS} = full-load baseline, newest 1 = first incremental batch)")
+        months = find_available_recent_months(BASELINE_MONTHS + 1)
+        months = list(reversed(months))  # oldest first
 
-    print("\n== Incremental load ==")
-    inc_csvs = download_and_extract(INCREMENTAL_MONTH, os.path.join(RAW_DIR, "incremental", INCREMENTAL_MONTH))
-    if inc_csvs:
-        write_sample(
-            inc_csvs[0],
-            os.path.join(SAMPLE_DIR, f"incremental_load_sample_{INCREMENTAL_MONTH}.csv"),
-        )
+        if len(months) < BASELINE_MONTHS + 1:
+            print(f"\nOnly found {len(months)} months. Check your internet connection and rerun.")
+            return
+
+        baseline, incremental = months[:-1], months[-1]
+
+        first_sample_written = False
+        for yyyymm, content, fname in baseline:
+            csvs = extract_all_csvs(content, os.path.join(RAW_DIR, "full_load", yyyymm))
+            print(f"  {yyyymm}: {len(csvs)} CSV part(s) extracted (full load)")
+            manifest["baseline_months"].append(yyyymm)
+            if not first_sample_written and csvs:
+                write_sample(csvs[0], os.path.join(SAMPLE_DIR, f"full_load_sample_{yyyymm}.csv"))
+                first_sample_written = True
+
+        yyyymm, content, fname = incremental
+        csvs = extract_all_csvs(content, os.path.join(RAW_DIR, "incremental", yyyymm))
+        print(f"  {yyyymm}: {len(csvs)} CSV part(s) extracted (incremental)")
+        if csvs:
+            write_sample(csvs[0], os.path.join(SAMPLE_DIR, f"incremental_load_sample_{yyyymm}.csv"))
+        manifest["baseline_months"].append(yyyymm)
+
+        save_manifest(manifest)
+        print(f"\nIngested months: {manifest['baseline_months']}")
+
+    else:
+        print(f"== Baseline already set: {manifest['baseline_months']} ==")
+        print("== Checking for a new month to ingest as INCREMENTAL ==")
+        latest_baseline = max(manifest["baseline_months"])
+        y, m = int(latest_baseline[:4]), int(latest_baseline[4:])
+        m += 1
+        if m == 13:
+            m, y = 1, y + 1
+        candidate = f"{y}{m:02d}"
+
+        content, fname = try_download(candidate)
+        if content:
+            csvs = extract_all_csvs(content, os.path.join(RAW_DIR, "incremental", candidate))
+            print(f"  {candidate}: {len(csvs)} CSV part(s) extracted -- NEW incremental month")
+            if csvs:
+                write_sample(csvs[0], os.path.join(SAMPLE_DIR, f"incremental_load_sample_{candidate}.csv"))
+            manifest["baseline_months"].append(candidate)
+            save_manifest(manifest)
+        else:
+            print(f"  {candidate} is not published yet. Nothing new to ingest -- try again later.")
 
     print("\nDone. Full raw files are in data/raw/ (gitignored).")
     print("Trimmed samples for the repo are in data/samples/.")
