@@ -46,8 +46,10 @@ def process_month(month):
     return {"rows_read": rows_read, **trips, "rows_quarantined": n_quarantined}
 
 
-def process_stations(month):
-    trips = spark.table(cfg["silver_trips"]).where(F.col("source_month") == month)
+def process_stations():
+    # Derived from ALL of silver_trips (not just the month being run), so the result depends only on the data,
+    # never on which month triggered the run. This is what keeps re-runs and backfills idempotent.
+    trips = spark.table(cfg["silver_trips"])
     stations = derive_stations(trips, ctx["batch_id"])
     res = merge_into(cfg["silver_stations"], stations, ["station_id"])
     return {"rows_read": stations.count(), **res}
@@ -55,10 +57,10 @@ def process_stations(month):
 
 results = []
 for month in months:
-    outcome = run_step(cfg, ctx, "bronze_to_silver", f"trips month={month}", lambda m=month: process_month(m))
-    results.append(outcome)
-    if outcome[0] == "SUCCESS":
-        results.append(run_step(cfg, ctx, "bronze_to_silver_stations", f"stations month={month}", lambda m=month: process_stations(m)))
+    results.append(run_step(cfg, ctx, "bronze_to_silver", f"trips month={month}", lambda m=month: process_month(m)))
+
+if any(r[0] == "SUCCESS" for r in results):
+    results.append(run_step(cfg, ctx, "bronze_to_silver_stations", "stations (all months in silver_trips)", process_stations))
 
 # COMMAND ----------
 
