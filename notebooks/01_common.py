@@ -207,6 +207,8 @@ def transform_trips_silver(bronze_df, batch_id, valid_member_types=("member", "c
         F.expr("try_cast(start_lng as double)").alias("start_lng"),
         F.expr("try_cast(end_lat as double)").alias("end_lat"),
         F.expr("try_cast(end_lng as double)").alias("end_lng"),
+        _clean("start_lat").alias("_raw_start_lat"), _clean("start_lng").alias("_raw_start_lng"),
+        _clean("end_lat").alias("_raw_end_lat"), _clean("end_lng").alias("_raw_end_lng"),
         F.lower(_clean("member_casual")).alias("member_casual"),
         F.col(CORRUPT_COL),
         F.to_json(F.struct(*[F.col(c) for c in raw_cols])).alias("raw_record"),
@@ -223,6 +225,10 @@ def transform_trips_silver(bronze_df, batch_id, valid_member_types=("member", "c
         ("duration_over_limit", c("trip_duration_seconds") > max_trip_seconds),
         ("invalid_start_location", c("start_station_id").isNull() & (c("start_lat").isNull() | c("start_lng").isNull())),
         ("invalid_end_location", c("end_station_id").isNull() & (c("end_lat").isNull() | c("end_lng").isNull())),
+        # a coordinate that was present but is not a number (e.g. 'N/A') must not silently become NULL
+        ("invalid_coordinates",
+         (c("_raw_start_lat").isNotNull() & c("start_lat").isNull()) | (c("_raw_start_lng").isNotNull() & c("start_lng").isNull())
+         | (c("_raw_end_lat").isNotNull() & c("end_lat").isNull()) | (c("_raw_end_lng").isNotNull() & c("end_lng").isNull())),
         ("invalid_member_type", ~c("member_casual").isin(*valid_member_types) | c("member_casual").isNull()),
     ]
     flagged = typed.withColumn("quarantine_reason", _reasons(rules))
@@ -353,13 +359,22 @@ def merge_into(table, staging_df, key_columns, update_when_changed=True):
 
 
 def write_bronze_trips_file(df, table, source_file, evolve):
-    """Replace exactly this file's rows in Bronze (re-running a file never duplicates it)."""
+    """
+    Replace exactly this file's rows in Bronze (re-running a file never duplicates it).
+    Columns the table already has but this file lacks (added by an earlier schema evolution) are filled with NULL;
+    columns the table does not have are only written when evolve=True (mergeSchema).
+    """
     spark = _spark()
-    cols = df.columns
     if spark.catalog.tableExists(table):
-        (df.select(*cols).write.format("delta").mode("overwrite")
+        table_cols = spark.table(table).columns
+        for c in table_cols:
+            if c not in df.columns:
+                df = df.withColumn(c, F.lit(None).cast("string"))
+        new_cols = [c for c in df.columns if c not in table_cols]
+        df = df.select(*table_cols, *new_cols)
+        (df.write.format("delta").mode("overwrite")
            .option("replaceWhere", f"source_file = '{source_file}'")
-           .option("mergeSchema", "true" if evolve else "false")
+           .option("mergeSchema", "true" if (evolve and new_cols) else "false")
            .saveAsTable(table))
     else:
         df.write.format("delta").saveAsTable(table)

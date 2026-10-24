@@ -32,6 +32,7 @@ BAD = {
     "no_id":           ",classic_bike,2026-03-16 09:00:00.000,2026-03-16 09:10:00.000,A,1.01,B,2.02,40.7,-73.9,40.71,-73.91,member",
     "bad_member":      "SUB0000000000001,classic_bike,2026-03-16 09:00:00.000,2026-03-16 09:10:00.000,A,1.01,B,2.02,40.7,-73.9,40.71,-73.91,subscriber",
     "truncated":       "SHORT00000000001,classic_bike,2026-03-16 09:00:00.000",
+    "text_coordinate": "TEXTLAT000000001,classic_bike,2026-03-16 09:00:00.000,2026-03-16 09:10:00.000,A,1.01,B,2.02,N/A,-73.9,40.71,-73.91,member",
 }
 
 
@@ -95,6 +96,7 @@ def test_silver_types_and_rules(spark, lib, tmp_path):
     assert reasons["SUB0000000000001"] == "invalid_member_type"
     assert "corrupt_record" in reasons["SHORT00000000001"]
     assert reasons[None] == "missing_ride_id"
+    assert reasons["TEXTLAT000000001"] == "invalid_coordinates", "a text value in a number column must be quarantined, not silently NULLed"
 
 
 def test_row_hash_is_stable_across_runs(spark, lib, tmp_path):
