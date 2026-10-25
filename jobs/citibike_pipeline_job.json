@@ -1,0 +1,185 @@
+{
+  "name": "citibike_medallion_pipeline",
+  "description": "Raw -> Bronze -> Silver -> Gold for Citi Bike trips, station information and live GBFS availability. Replace <your-email> in every notebook_path before importing. Tasks run in sequence because several of them MERGE into shared tables (quarantine_records, the Gold dimensions); parallel MERGEs into one Delta table can conflict.",
+  "parameters": [
+    {
+      "name": "catalog",
+      "default": "workspace"
+    },
+    {
+      "name": "load_type",
+      "default": "incremental"
+    },
+    {
+      "name": "start_month",
+      "default": "202609"
+    },
+    {
+      "name": "end_month",
+      "default": "202609"
+    },
+    {
+      "name": "gbfs_start_date",
+      "default": ""
+    },
+    {
+      "name": "gbfs_end_date",
+      "default": ""
+    }
+  ],
+  "max_concurrent_runs": 1,
+  "tasks": [
+    {
+      "task_key": "trips_raw_to_bronze",
+      "notebook_task": {
+        "notebook_path": "/Workspace/Users/<your-email>/citibike/notebooks/02_raw_to_bronze_trips",
+        "base_parameters": {
+          "catalog": "{{job.parameters.catalog}}",
+          "load_type": "{{job.parameters.load_type}}",
+          "batch_id": "{{job.run_id}}",
+          "fail_on_error": "true",
+          "start_month": "{{job.parameters.start_month}}",
+          "end_month": "{{job.parameters.end_month}}"
+        },
+        "source": "WORKSPACE"
+      }
+    },
+    {
+      "task_key": "trips_bronze_to_silver",
+      "notebook_task": {
+        "notebook_path": "/Workspace/Users/<your-email>/citibike/notebooks/03_bronze_to_silver_trips",
+        "base_parameters": {
+          "catalog": "{{job.parameters.catalog}}",
+          "load_type": "{{job.parameters.load_type}}",
+          "batch_id": "{{job.run_id}}",
+          "fail_on_error": "true",
+          "start_month": "{{job.parameters.start_month}}",
+          "end_month": "{{job.parameters.end_month}}"
+        },
+        "source": "WORKSPACE"
+      },
+      "depends_on": [
+        {
+          "task_key": "trips_raw_to_bronze"
+        }
+      ]
+    },
+    {
+      "task_key": "station_info_to_silver",
+      "notebook_task": {
+        "notebook_path": "/Workspace/Users/<your-email>/citibike/notebooks/06_station_info_to_silver",
+        "base_parameters": {
+          "catalog": "{{job.parameters.catalog}}",
+          "load_type": "{{job.parameters.load_type}}",
+          "batch_id": "{{job.run_id}}",
+          "fail_on_error": "true"
+        },
+        "source": "WORKSPACE"
+      },
+      "depends_on": [
+        {
+          "task_key": "trips_bronze_to_silver"
+        }
+      ]
+    },
+    {
+      "task_key": "trips_silver_to_gold",
+      "notebook_task": {
+        "notebook_path": "/Workspace/Users/<your-email>/citibike/notebooks/07_silver_to_gold_trips",
+        "base_parameters": {
+          "catalog": "{{job.parameters.catalog}}",
+          "load_type": "{{job.parameters.load_type}}",
+          "batch_id": "{{job.run_id}}",
+          "fail_on_error": "true",
+          "start_month": "{{job.parameters.start_month}}",
+          "end_month": "{{job.parameters.end_month}}"
+        },
+        "source": "WORKSPACE"
+      },
+      "depends_on": [
+        {
+          "task_key": "station_info_to_silver"
+        }
+      ]
+    },
+    {
+      "task_key": "gbfs_raw_to_bronze",
+      "notebook_task": {
+        "notebook_path": "/Workspace/Users/<your-email>/citibike/notebooks/04_gbfs_raw_to_bronze",
+        "base_parameters": {
+          "catalog": "{{job.parameters.catalog}}",
+          "load_type": "{{job.parameters.load_type}}",
+          "batch_id": "{{job.run_id}}",
+          "fail_on_error": "true"
+        },
+        "source": "WORKSPACE"
+      },
+      "depends_on": [
+        {
+          "task_key": "trips_silver_to_gold"
+        }
+      ]
+    },
+    {
+      "task_key": "gbfs_bronze_to_silver",
+      "notebook_task": {
+        "notebook_path": "/Workspace/Users/<your-email>/citibike/notebooks/05_gbfs_bronze_to_silver",
+        "base_parameters": {
+          "catalog": "{{job.parameters.catalog}}",
+          "load_type": "{{job.parameters.load_type}}",
+          "batch_id": "{{job.run_id}}",
+          "fail_on_error": "true",
+          "start_date": "{{job.parameters.gbfs_start_date}}",
+          "end_date": "{{job.parameters.gbfs_end_date}}"
+        },
+        "source": "WORKSPACE"
+      },
+      "depends_on": [
+        {
+          "task_key": "gbfs_raw_to_bronze"
+        }
+      ]
+    },
+    {
+      "task_key": "gbfs_silver_to_gold",
+      "notebook_task": {
+        "notebook_path": "/Workspace/Users/<your-email>/citibike/notebooks/08_silver_to_gold_gbfs",
+        "base_parameters": {
+          "catalog": "{{job.parameters.catalog}}",
+          "load_type": "{{job.parameters.load_type}}",
+          "batch_id": "{{job.run_id}}",
+          "fail_on_error": "true",
+          "start_date": "{{job.parameters.gbfs_start_date}}",
+          "end_date": "{{job.parameters.gbfs_end_date}}"
+        },
+        "source": "WORKSPACE"
+      },
+      "depends_on": [
+        {
+          "task_key": "gbfs_bronze_to_silver"
+        }
+      ]
+    },
+    {
+      "task_key": "optimize_gold",
+      "notebook_task": {
+        "notebook_path": "/Workspace/Users/<your-email>/citibike/notebooks/09_optimize_gold",
+        "base_parameters": {
+          "catalog": "{{job.parameters.catalog}}",
+          "batch_id": "{{job.run_id}}"
+        },
+        "source": "WORKSPACE"
+      },
+      "depends_on": [
+        {
+          "task_key": "gbfs_silver_to_gold"
+        }
+      ]
+    }
+  ],
+  "schedule": {
+    "quartz_cron_expression": "0 0 6 * * ?",
+    "timezone_id": "America/New_York",
+    "pause_status": "PAUSED"
+  }
+}
