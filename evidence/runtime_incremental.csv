@@ -1,0 +1,10 @@
+pipeline_layer,steps,minutes,rows_read
+bronze_to_silver,1,0.3,50000
+bronze_to_silver_gbfs,1,0.2,200
+bronze_to_silver_station_info,1,0.2,2521
+bronze_to_silver_stations,1,0.1,2404
+gold_maintenance,9,0.7,366644
+raw_to_bronze,1,0.9,50000
+raw_to_bronze_gbfs,1,0.1,200
+raw_to_bronze_station_info,1,0.1,2521
+silver_to_gold,13,1.5,510189

@@ -1,0 +1,26 @@
+== Physical Plan ==
+PhotonResultStage (3)
++- PhotonColumnarToRow (2)
+   +- PhotonScan parquet workspace.citibike_gold.fact_trips (1)
+
+
+(1) PhotonScan parquet workspace.citibike_gold.fact_trips
+Output [16]: [ride_id#10084, date_key#10085, time_key#10086, start_station_key#10087L, end_station_key#10088L, rider_type_key#10089L, started_at#10090, ended_at#10091, trip_duration_seconds#10092L, trip_duration_minutes#10093, distance_km#10094, is_round_trip#10095, source_month#10096, row_hash#10097, batch_id#10098, load_timestamp#10099]
+DictionaryFilters: [((isnotnull(date_key#10085) AND (date_key#10085 >= 20260315)) AND (date_key#10085 <= 20260321))]
+Location: PreparedDeltaFileIndex [s3://dbstorage-prod-2qgcjtjnfn/uc/a96a530f-d2f5-426b-8d07-fba0bda77a08/e5747006-0285-434f-ba78-99864b868f3b/__unitystorage/catalogs/16ec030b-a14f-4f67-9110-43567d0517ed/tables/91e14b96-dbd2-4e9f-9614-efe5349fbaaa]
+ReadSchema: struct<ride_id:string,date_key:int,time_key:int,start_station_key:bigint,end_station_key:bigint,rider_type_key:bigint,started_at:timestamp,ended_at:timestamp,trip_duration_seconds:bigint,trip_duration_minutes:double,distance_km:double,is_round_trip:boolean,source_month:string,row_hash:string,batch_id:string,load_timestamp:timestamp>
+RequiredDataFilters: [isnotnull(date_key#10085), (date_key#10085 >= 20260315), (date_key#10085 <= 20260321)]
+
+(2) PhotonColumnarToRow
+Input [16]: [ride_id#10084, date_key#10085, time_key#10086, start_station_key#10087L, end_station_key#10088L, rider_type_key#10089L, started_at#10090, ended_at#10091, trip_duration_seconds#10092L, trip_duration_minutes#10093, distance_km#10094, is_round_trip#10095, source_month#10096, row_hash#10097, batch_id#10098, load_timestamp#10099]
+
+(3) PhotonResultStage
+Input [16]: [ride_id#10084, date_key#10085, time_key#10086, start_station_key#10087L, end_station_key#10088L, rider_type_key#10089L, started_at#10090, ended_at#10091, trip_duration_seconds#10092L, trip_duration_minutes#10093, distance_km#10094, is_round_trip#10095, source_month#10096, row_hash#10097, batch_id#10098, load_timestamp#10099]
+
+
+== Photon Explanation ==
+The query is fully supported by Photon.
+== Optimizer Statistics (table names per statistics state) ==
+  missing = 
+  partial = 
+  full    = fact_trips
